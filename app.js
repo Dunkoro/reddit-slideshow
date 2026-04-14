@@ -1,85 +1,136 @@
 const mediaContainer = document.getElementById('media-container');
 const uiContainer = document.getElementById('ui-container');
 const startBtn = document.getElementById('start-btn');
+const playPauseBtn = document.getElementById('play-pause-btn');
 const subredditInput = document.getElementById('subreddit-input');
 
+// --- STATE MANAGEMENT ---
 let posts = [];
 let currentIndex = 0;
 let slideTimer = null;
-const IMAGE_DURATION = 5000; // 5 seconds for images
+let isPlaying = true;
+let afterToken = null;
+let isFetching = false;
+let currentWaitTime = 0; // Tracks remaining time if paused
 
-// --- 1. DATA FETCHING & PARSING ---
-async function fetchRedditData(subreddits) {
-    try {
-        // 1. Construct the target Reddit URL
-        const targetUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50`;
+const IMAGE_DURATION = 5000;
+
+// --- 1. INITIALIZATION & UI LOGIC ---
+function init() {
+    // Load saved subreddits
+    const saved = localStorage.getItem('reddit_slideshow_subs');
+    if (saved) subredditInput.value = saved;
+
+    // Idle Mouse/UI Hide Logic
+    let idleTimeout;
+    document.addEventListener('mousemove', () => {
+        document.body.classList.remove('idle');
+        uiContainer.classList.remove('hidden');
+        clearTimeout(idleTimeout);
         
-        // 2. Wrap it in a CORS proxy to bypass browser restrictions
+        idleTimeout = setTimeout(() => {
+            if (isPlaying && posts.length > 0) {
+                document.body.classList.add('idle');
+                uiContainer.classList.add('hidden');
+            }
+        }, 3000);
+    });
+}
+
+// --- 2. DATA FETCHING (WITH PAGINATION) ---
+async function fetchRedditData(subreddits, append = false) {
+    if (isFetching) return;
+    isFetching = true;
+
+    try {
+        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50`;
+        const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
         const response = await fetch(proxyUrl);
-
-        if (!response.ok) {
-            throw new Error(`HTTP Error: ${response.status} - ${response.statusText}`);
-        }
-
-        const json = await response.json();
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
         
-        // Filter out text posts and unsupported media
-        posts = json.data.children.filter(post => {
+        const json = await response.json();
+        afterToken = json.data.after; // Save token for next page
+
+        const newPosts = [];
+        
+        json.data.children.forEach(post => {
             const data = post.data;
-            
-            // 1. Check if Reddit explicitly flags it as an image
-            const isExplicitImage = data.post_hint === 'image';
-            
-            // 2. Regex checks for .jpg, .jpeg, .png, .gif, ignoring anything after a '?'
-            const hasImageExtension = data.url && data.url.match(/\.(jpg|jpeg|png|gif)(\?.*)?$/i);
-            
-            return data.url && (isExplicitImage || hasImageExtension || data.is_video);
-        }).map(post => {
-            const data = post.data;
-            return {
-                title: data.title,
-                isVideo: data.is_video,
-                // Reddit nests video URLs deeply. Fallback to image URL if not a video.
-                url: data.is_video ? data.media.reddit_video.fallback_url : data.url
-            };
+
+            // Gallery Post Logic: Extract all images and flatten them into individual slides
+            if (data.is_gallery && data.media_metadata) {
+                Object.values(data.media_metadata).forEach(media => {
+                    if (media.s && media.s.u) {
+                        // Reddit escapes gallery URLs; we must unescape them
+                        const cleanUrl = media.s.u.replace(/&amp;/g, '&');
+                        newPosts.push({ title: data.title, isVideo: false, url: cleanUrl });
+                    }
+                });
+            } else {
+                // Standard Post Logic
+                const isExplicitImage = data.post_hint === 'image';
+                const hasImageExtension = data.url && data.url.match(/\.(jpg|jpeg|png|gif)(\?.*)?$/i);
+                
+                if (data.url && (isExplicitImage || hasImageExtension || data.is_video)) {
+                    newPosts.push({
+                        title: data.title,
+                        isVideo: data.is_video,
+                        url: data.is_video ? data.media.reddit_video.fallback_url : data.url
+                    });
+                }
+            }
         });
 
-        if (posts.length > 0) {
-            currentIndex = 0;
-            uiContainer.classList.add('hidden');
-            renderCurrentPost();
+        if (append) {
+            posts = posts.concat(newPosts);
         } else {
-            alert("No valid images or videos found in those subreddits.");
+            posts = newPosts;
+            currentIndex = 0;
+            if (posts.length > 0) {
+                playPauseBtn.disabled = false;
+                renderCurrentPost();
+            } else {
+                alert("No valid images or videos found.");
+            }
         }
     } catch (error) {
-        console.error("Network or Parsing Error:", error);
-        alert(`Failed to fetch data. Check console (F12) for details.\nError: ${error.message}`);
+        console.error("Network Error:", error);
+    } finally {
+        isFetching = false;
     }
 }
 
-// --- 2. RENDER & TIMER LOGIC ---
+// --- 3. RENDER & PLAYBACK LOGIC ---
 function renderCurrentPost() {
-    clearTimeout(slideTimer); // Reset existing timers
-    mediaContainer.innerHTML = ''; // Clear current media
+    clearTimeout(slideTimer);
+    mediaContainer.innerHTML = '';
 
-    if (currentIndex >= posts.length) {
-        currentIndex = 0; // Loop back to start (can be modified to fetch next page)
+    // Pagination: Fetch more if we are 5 slides away from the end
+    if (currentIndex >= posts.length - 5 && afterToken) {
+        fetchRedditData(subredditInput.value.trim(), true);
     }
 
+    // Safety loop if pagination hasn't caught up
+    if (currentIndex >= posts.length) currentIndex = 0;
+
     const post = posts[currentIndex];
+
+    // Preload next image in the background
+    if (posts[currentIndex + 1] && !posts[currentIndex + 1].isVideo) {
+        const preloader = new Image();
+        preloader.src = posts[currentIndex + 1].url;
+    }
 
     if (post.isVideo) {
         const video = document.createElement('video');
         video.src = post.url;
         video.autoplay = true;
-        video.muted = true; // Required for autoplay policies in browsers
+        video.muted = true;
         
         video.addEventListener('loadedmetadata', () => {
-            // Logic: Max 30s. If video is 10s, waits 10s. If 45s, cuts at 30s.
-            const waitTime = Math.min(video.duration, 30) * 1000; 
-            slideTimer = setTimeout(nextSlide, waitTime);
+            currentWaitTime = Math.min(video.duration, 30) * 1000;
+            if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
         });
         
         mediaContainer.appendChild(video);
@@ -87,8 +138,8 @@ function renderCurrentPost() {
         const img = document.createElement('img');
         img.src = post.url;
         
-        // Static timer for images
-        slideTimer = setTimeout(nextSlide, IMAGE_DURATION);
+        currentWaitTime = IMAGE_DURATION;
+        if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
         
         mediaContainer.appendChild(img);
     }
@@ -104,31 +155,44 @@ function prevSlide() {
     renderCurrentPost();
 }
 
-// --- 3. SWIPE GESTURE LOGIC ---
-let touchStartX = 0;
-let touchEndX = 0;
-
-function handleGesture() {
-    const swipeThreshold = 50; // Minimum distance to register a swipe
-    if (touchStartX - touchEndX > swipeThreshold) {
-        nextSlide(); // Swiped left
-    }
-    if (touchEndX - touchStartX > swipeThreshold) {
-        prevSlide(); // Swiped right
+function togglePlayPause() {
+    isPlaying = !isPlaying;
+    playPauseBtn.textContent = isPlaying ? "Pause" : "Play";
+    
+    if (isPlaying) {
+        // Resume playback immediately
+        const media = mediaContainer.querySelector('video');
+        if (media) media.play();
+        slideTimer = setTimeout(nextSlide, currentWaitTime);
+    } else {
+        // Pause playback
+        clearTimeout(slideTimer);
+        const media = mediaContainer.querySelector('video');
+        if (media) media.pause();
     }
 }
 
-document.addEventListener('touchstart', e => {
-    touchStartX = e.changedTouches[0].screenX;
-});
-
-document.addEventListener('touchend', e => {
-    touchEndX = e.changedTouches[0].screenX;
-    handleGesture();
-});
-
-// --- 4. INIT ---
+// --- 4. EVENT LISTENERS ---
 startBtn.addEventListener('click', () => {
     const subreddits = subredditInput.value.trim();
-    if (subreddits) fetchRedditData(subreddits);
+    if (subreddits) {
+        localStorage.setItem('reddit_slideshow_subs', subreddits);
+        fetchRedditData(subreddits, false);
+    }
 });
+
+playPauseBtn.addEventListener('click', togglePlayPause);
+
+// Swipe Gestures
+let touchStartX = 0;
+let touchEndX = 0;
+
+document.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; });
+document.addEventListener('touchend', e => {
+    touchEndX = e.changedTouches[0].screenX;
+    if (touchStartX - touchEndX > 50) nextSlide();
+    if (touchEndX - touchStartX > 50) prevSlide();
+});
+
+// Boot
+init();
