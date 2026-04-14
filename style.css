@@ -9,9 +9,12 @@ body, html {
     color: white;
 }
 
-/* Hides cursor during slideshow */
-body.idle {
-    cursor: none;
+/* Centralized Idle Logic: Hides cursor and both overlays */
+body.idle { cursor: none; }
+body.idle #ui-container,
+body.idle #info-overlay {
+    opacity: 0;
+    pointer-events: none;
 }
 
 #ui-container {
@@ -25,11 +28,6 @@ body.idle {
     display: flex;
     gap: 10px;
     transition: opacity 0.3s ease;
-}
-
-#ui-container.hidden { 
-    opacity: 0; 
-    pointer-events: none; 
 }
 
 button {
@@ -48,10 +46,40 @@ button:disabled {
     display: flex;
     justify-content: center;
     align-items: center;
+    /* Crucial for tap navigation: ensures the container catches clicks anywhere on screen */
+    position: absolute; 
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 1;
 }
 
 img, video {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
+}
+
+#info-overlay {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    right: 20px;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 15px;
+    border-radius: 8px;
+    transition: opacity 0.3s ease;
+    text-align: left;
+    pointer-events: none; /* Lets you tap through it to trigger the next slide */
+}
+
+#info-overlay h2 {
+    margin: 0 0 5px 0;
+    font-size: 1.2rem;
+    line-height: 1.4;
+}
+
+#info-overlay p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #aaa;
 }
