@@ -71,13 +71,13 @@ function markAsSeen(id) {
     localStorage.setItem('rs_seen_posts', JSON.stringify(seenArray));
 }
 
-// --- 2. DATA FETCHING ---
 async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
 
     try {
-        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50`;
+        // ADDED CACHE BUSTER: Forces fresh data on every single request
+        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
@@ -92,14 +92,12 @@ async function fetchRedditData(subreddits, append = false) {
         json.data.children.forEach(post => {
             const data = post.data;
 
-            // Simplified filter: Skip immediately if the post ID is in history
-            if (seenPosts.has(data.id)) return;
+            if (seenPosts.has(data.id)) return; // Filter triggers here
 
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
                         const cleanUrl = media.s.u.replace(/&amp;/g, '&');
-                        // Use the parent data.id for all images in this gallery
                         newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: false, isGalleryItem: true, url: cleanUrl });
                     }
                 });
@@ -127,11 +125,19 @@ async function fetchRedditData(subreddits, append = false) {
         });
 
         if (append) {
+            const wasEmpty = posts.length === 0;
             posts = posts.concat(newPosts);
+            
             if (posts.length - currentIndex < 5 && afterToken) {
                 isFetching = false;
                 fetchRedditData(subredditInput.value.trim(), true);
                 return;
+            }
+            
+            // BUG FIX: Kickstart playback if the initial page was 100% filtered out
+            if (wasEmpty && posts.length > 0) {
+                playPauseBtn.disabled = false;
+                renderCurrentPost();
             }
         } else {
             posts = newPosts;
