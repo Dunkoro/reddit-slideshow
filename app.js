@@ -28,7 +28,14 @@ async function fetchRedditData(subreddits) {
         // Filter out text posts and unsupported media
         posts = json.data.children.filter(post => {
             const data = post.data;
-            return data.url && (data.url.endsWith('.jpg') || data.url.endsWith('.png') || data.is_video);
+            
+            // 1. Check if Reddit explicitly flags it as an image
+            const isExplicitImage = data.post_hint === 'image';
+            
+            // 2. Regex checks for .jpg, .jpeg, .png, .gif, ignoring anything after a '?'
+            const hasImageExtension = data.url && data.url.match(/\.(jpg|jpeg|png|gif)(\?.*)?$/i);
+            
+            return data.url && (isExplicitImage || hasImageExtension || data.is_video);
         }).map(post => {
             const data = post.data;
             return {
