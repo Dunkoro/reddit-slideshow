@@ -9,7 +9,6 @@ body, html {
     color: white;
 }
 
-/* Centralized Idle Logic: Hides cursor and both overlays */
 body.idle { cursor: none; }
 body.idle #ui-container,
 body.idle #info-overlay {
@@ -28,6 +27,21 @@ body.idle #info-overlay {
     display: flex;
     gap: 10px;
     transition: opacity 0.3s ease;
+    max-width: 90vw;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+#subreddit-input { flex-grow: 1; min-width: 120px; }
+
+/* New Speed Controls Styling */
+#speed-controls {
+    display: flex;
+    gap: 5px;
+}
+#speed-controls input {
+    width: 45px;
+    text-align: center;
 }
 
 button {
@@ -46,7 +60,6 @@ button:disabled {
     display: flex;
     justify-content: center;
     align-items: center;
-    /* Crucial for tap navigation: ensures the container catches clicks anywhere on screen */
     position: absolute; 
     top: 0; left: 0; right: 0; bottom: 0;
     z-index: 1;
@@ -69,7 +82,7 @@ img, video {
     border-radius: 8px;
     transition: opacity 0.3s ease;
     text-align: left;
-    pointer-events: none; /* Lets you tap through it to trigger the next slide */
+    pointer-events: none;
 }
 
 #info-overlay h2 {
