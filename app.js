@@ -77,7 +77,13 @@ async function fetchRedditData(subreddits, append = false) {
 
     try {
         // ADDED CACHE BUSTER: Forces fresh data on every single request
-        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50&t=${Date.now()}`;
+        // 1. Detect if the user typed a custom path (like a multireddit) or standard subreddits
+        let path = subreddits;
+        if (!path.includes('/')) {
+            path = `r/${path}`; // Default to standard subreddits if no slashes are found
+        }
+        // 2. Construct the URL using the dynamic path
+        const baseUrl = `https://www.reddit.com/${path}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
