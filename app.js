@@ -3,6 +3,8 @@ const uiContainer = document.getElementById('ui-container');
 const startBtn = document.getElementById('start-btn');
 const playPauseBtn = document.getElementById('play-pause-btn');
 const subredditInput = document.getElementById('subreddit-input');
+const postTitle = document.getElementById('post-title');
+const postSubreddit = document.getElementById('post-subreddit');
 
 // --- STATE MANAGEMENT ---
 let posts = [];
@@ -11,33 +13,33 @@ let slideTimer = null;
 let isPlaying = true;
 let afterToken = null;
 let isFetching = false;
-let currentWaitTime = 0; // Tracks remaining time if paused
+let currentWaitTime = 0;
+let idleTimeout;
 
 const IMAGE_DURATION = 5000;
 
 // --- 1. INITIALIZATION & UI LOGIC ---
 function init() {
-    // Load saved subreddits
     const saved = localStorage.getItem('reddit_slideshow_subs');
     if (saved) subredditInput.value = saved;
 
-    // Idle Mouse/UI Hide Logic
-    let idleTimeout;
-    document.addEventListener('mousemove', () => {
-        document.body.classList.remove('idle');
-        uiContainer.classList.remove('hidden');
-        clearTimeout(idleTimeout);
-        
-        idleTimeout = setTimeout(() => {
-            if (isPlaying && posts.length > 0) {
-                document.body.classList.add('idle');
-                uiContainer.classList.add('hidden');
-            }
-        }, 3000);
-    });
+    // Wake up UI on mouse move or screen tap
+    document.addEventListener('mousemove', wakeUpUI);
+    document.addEventListener('touchstart', wakeUpUI);
 }
 
-// --- 2. DATA FETCHING (WITH PAGINATION) ---
+function wakeUpUI() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimeout);
+    
+    idleTimeout = setTimeout(() => {
+        if (isPlaying && posts.length > 0) {
+            document.body.classList.add('idle');
+        }
+    }, 3000);
+}
+
+// --- 2. DATA FETCHING (WITH ROBUST VIDEO PARSING) ---
 async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
@@ -51,32 +53,45 @@ async function fetchRedditData(subreddits, append = false) {
         if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
         
         const json = await response.json();
-        afterToken = json.data.after; // Save token for next page
+        afterToken = json.data.after;
 
         const newPosts = [];
         
         json.data.children.forEach(post => {
             const data = post.data;
 
-            // Gallery Post Logic: Extract all images and flatten them into individual slides
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
-                        // Reddit escapes gallery URLs; we must unescape them
                         const cleanUrl = media.s.u.replace(/&amp;/g, '&');
-                        newPosts.push({ title: data.title, isVideo: false, url: cleanUrl });
+                        newPosts.push({ title: data.title, subreddit: data.subreddit, isVideo: false, url: cleanUrl });
                     }
                 });
             } else {
-                // Standard Post Logic
+                // Fixed Video Logic: Check deep nested secure_media or explicit video file extensions
+                const isExplicitVideo = data.is_video && data.secure_media && data.secure_media.reddit_video;
+                const hasVideoExtension = data.url && data.url.match(/\.(mp4|gifv|webm)$/i);
+                
                 const isExplicitImage = data.post_hint === 'image';
                 const hasImageExtension = data.url && data.url.match(/\.(jpg|jpeg|png|gif)(\?.*)?$/i);
                 
-                if (data.url && (isExplicitImage || hasImageExtension || data.is_video)) {
+                if (data.url && (isExplicitImage || hasImageExtension || isExplicitVideo || hasVideoExtension)) {
+                    let mediaUrl = data.url;
+                    let isVideoFlag = false;
+
+                    if (isExplicitVideo) {
+                        mediaUrl = data.secure_media.reddit_video.fallback_url;
+                        isVideoFlag = true;
+                    } else if (hasVideoExtension) {
+                        isVideoFlag = true;
+                        if (mediaUrl.endsWith('.gifv')) mediaUrl = mediaUrl.replace('.gifv', '.mp4'); // Fix imgur gifv links
+                    }
+
                     newPosts.push({
                         title: data.title,
-                        isVideo: data.is_video,
-                        url: data.is_video ? data.media.reddit_video.fallback_url : data.url
+                        subreddit: data.subreddit,
+                        isVideo: isVideoFlag,
+                        url: mediaUrl
                     });
                 }
             }
@@ -106,17 +121,18 @@ function renderCurrentPost() {
     clearTimeout(slideTimer);
     mediaContainer.innerHTML = '';
 
-    // Pagination: Fetch more if we are 5 slides away from the end
     if (currentIndex >= posts.length - 5 && afterToken) {
         fetchRedditData(subredditInput.value.trim(), true);
     }
 
-    // Safety loop if pagination hasn't caught up
     if (currentIndex >= posts.length) currentIndex = 0;
 
     const post = posts[currentIndex];
 
-    // Preload next image in the background
+    // Update Info Overlay
+    postTitle.textContent = post.title;
+    postSubreddit.textContent = `r/${post.subreddit}`;
+
     if (posts[currentIndex + 1] && !posts[currentIndex + 1].isVideo) {
         const preloader = new Image();
         preloader.src = posts[currentIndex + 1].url;
@@ -160,12 +176,10 @@ function togglePlayPause() {
     playPauseBtn.textContent = isPlaying ? "Pause" : "Play";
     
     if (isPlaying) {
-        // Resume playback immediately
         const media = mediaContainer.querySelector('video');
         if (media) media.play();
         slideTimer = setTimeout(nextSlide, currentWaitTime);
     } else {
-        // Pause playback
         clearTimeout(slideTimer);
         const media = mediaContainer.querySelector('video');
         if (media) media.pause();
@@ -183,15 +197,39 @@ startBtn.addEventListener('click', () => {
 
 playPauseBtn.addEventListener('click', togglePlayPause);
 
-// Swipe Gestures
+// Unified Gesture & Tap Handling
 let touchStartX = 0;
-let touchEndX = 0;
+let isSwiping = false;
 
-document.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; });
-document.addEventListener('touchend', e => {
-    touchEndX = e.changedTouches[0].screenX;
-    if (touchStartX - touchEndX > 50) nextSlide();
-    if (touchEndX - touchStartX > 50) prevSlide();
+mediaContainer.addEventListener('touchstart', e => { 
+    touchStartX = e.changedTouches[0].screenX; 
+    isSwiping = false; // Reset on new touch
+});
+
+mediaContainer.addEventListener('touchend', e => {
+    const touchEndX = e.changedTouches[0].screenX;
+    const distance = touchStartX - touchEndX;
+    
+    // Register as a swipe if finger traveled more than 50px
+    if (Math.abs(distance) > 50) {
+        isSwiping = true;
+        if (distance > 0) nextSlide(); // Swiped left
+        else prevSlide(); // Swiped right
+    }
+});
+
+// Tap/Click Navigation
+mediaContainer.addEventListener('click', e => {
+    if (isSwiping) return; // Prevent tap action if the user just finished a swipe
+    
+    const clickX = e.clientX;
+    const screenWidth = window.innerWidth;
+    
+    if (clickX > screenWidth / 2) {
+        nextSlide(); // Tapped right half
+    } else {
+        prevSlide(); // Tapped left half
+    }
 });
 
 // Boot
