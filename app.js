@@ -71,19 +71,13 @@ function markAsSeen(id) {
     localStorage.setItem('rs_seen_posts', JSON.stringify(seenArray));
 }
 
+// --- 2. DATA FETCHING (WITH IMAGE COMPRESSION) ---
 async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
 
     try {
-        // ADDED CACHE BUSTER: Forces fresh data on every single request
-        // 1. Detect if the user typed a custom path (like a multireddit) or standard subreddits
-        let path = subreddits;
-        if (!path.includes('/')) {
-            path = `r/${path}`; // Default to standard subreddits if no slashes are found
-        }
-        // 2. Construct the URL using the dynamic path
-        const baseUrl = `https://www.reddit.com/${path}.json?limit=50&t=${Date.now()}`;
+        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
@@ -98,12 +92,20 @@ async function fetchRedditData(subreddits, append = false) {
         json.data.children.forEach(post => {
             const data = post.data;
 
-            if (seenPosts.has(data.id)) return; // Filter triggers here
+            if (seenPosts.has(data.id)) return;
 
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
-                        const cleanUrl = media.s.u.replace(/&amp;/g, '&');
+                        // COMPRESSION LOGIC (GALLERIES): media.p contains compressed previews
+                        let targetUrl = media.s.u; 
+                        if (media.p && media.p.length > 0) {
+                            // Find the first preview that is at least 1080px wide, or fallback to the largest preview
+                            const optimalSize = media.p.find(img => img.x >= 1080) || media.p[media.p.length - 1];
+                            targetUrl = optimalSize.u;
+                        }
+                        
+                        const cleanUrl = targetUrl.replace(/&amp;/g, '&');
                         newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: false, isGalleryItem: true, url: cleanUrl });
                     }
                 });
@@ -123,6 +125,13 @@ async function fetchRedditData(subreddits, append = false) {
                     } else if (hasVideoExtension) {
                         isVideoFlag = true;
                         if (mediaUrl.endsWith('.gifv')) mediaUrl = mediaUrl.replace('.gifv', '.mp4');
+                    } else if (data.preview && data.preview.images && data.preview.images[0].resolutions) {
+                        // COMPRESSION LOGIC (SINGLE IMAGES): resolutions array contains compressed previews
+                        const resolutions = data.preview.images[0].resolutions;
+                        if (resolutions.length > 0) {
+                            const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
+                            mediaUrl = optimalSize.url.replace(/&amp;/g, '&');
+                        }
                     }
 
                     newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: isVideoFlag, isGalleryItem: false, url: mediaUrl });
@@ -140,7 +149,6 @@ async function fetchRedditData(subreddits, append = false) {
                 return;
             }
             
-            // BUG FIX: Kickstart playback if the initial page was 100% filtered out
             if (wasEmpty && posts.length > 0) {
                 playPauseBtn.disabled = false;
                 renderCurrentPost();
