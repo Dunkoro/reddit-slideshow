@@ -2,11 +2,11 @@ const mediaContainer = document.getElementById('media-container');
 const uiContainer = document.getElementById('ui-container');
 const startBtn = document.getElementById('start-btn');
 const playPauseBtn = document.getElementById('play-pause-btn');
+const clearBtn = document.getElementById('clear-btn');
 const subredditInput = document.getElementById('subreddit-input');
 const postTitle = document.getElementById('post-title');
 const postSubreddit = document.getElementById('post-subreddit');
 
-// The 3 Speed Inputs
 const imgSpeedInput = document.getElementById('img-speed');
 const galSpeedInput = document.getElementById('gal-speed');
 const vidMaxInput = document.getElementById('vid-max');
@@ -20,6 +20,10 @@ let afterToken = null;
 let isFetching = false;
 let currentWaitTime = 0;
 let idleTimeout;
+
+// Load seen history
+let seenPosts = new Set(JSON.parse(localStorage.getItem('rs_seen_posts') || '[]'));
+const MAX_HISTORY = 2000;
 
 // --- 1. INITIALIZATION & UI LOGIC ---
 function init() {
@@ -38,7 +42,6 @@ function init() {
     document.addEventListener('mousemove', wakeUpUI);
     document.addEventListener('touchstart', wakeUpUI);
     
-    // Save settings automatically
     [imgSpeedInput, galSpeedInput, vidMaxInput, subredditInput].forEach(input => {
         input.addEventListener('change', () => {
             localStorage.setItem('rs_subs', subredditInput.value);
@@ -55,6 +58,17 @@ function wakeUpUI() {
     idleTimeout = setTimeout(() => {
         if (isPlaying && posts.length > 0) document.body.classList.add('idle');
     }, 3000);
+}
+
+function markAsSeen(id) {
+    seenPosts.add(id);
+    
+    let seenArray = Array.from(seenPosts);
+    if (seenArray.length > MAX_HISTORY) {
+        seenArray = seenArray.slice(seenArray.length - MAX_HISTORY);
+        seenPosts = new Set(seenArray);
+    }
+    localStorage.setItem('rs_seen_posts', JSON.stringify(seenArray));
 }
 
 // --- 2. DATA FETCHING ---
@@ -78,12 +92,15 @@ async function fetchRedditData(subreddits, append = false) {
         json.data.children.forEach(post => {
             const data = post.data;
 
+            // Simplified filter: Skip immediately if the post ID is in history
+            if (seenPosts.has(data.id)) return;
+
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
                         const cleanUrl = media.s.u.replace(/&amp;/g, '&');
-                        // Explicitly tag this as a gallery item
-                        newPosts.push({ title: data.title, subreddit: data.subreddit, isVideo: false, isGalleryItem: true, url: cleanUrl });
+                        // Use the parent data.id for all images in this gallery
+                        newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: false, isGalleryItem: true, url: cleanUrl });
                     }
                 });
             } else {
@@ -104,22 +121,30 @@ async function fetchRedditData(subreddits, append = false) {
                         if (mediaUrl.endsWith('.gifv')) mediaUrl = mediaUrl.replace('.gifv', '.mp4');
                     }
 
-                    // Standard posts are never flagged as gallery items
-                    newPosts.push({ title: data.title, subreddit: data.subreddit, isVideo: isVideoFlag, isGalleryItem: false, url: mediaUrl });
+                    newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: isVideoFlag, isGalleryItem: false, url: mediaUrl });
                 }
             }
         });
 
         if (append) {
             posts = posts.concat(newPosts);
+            if (posts.length - currentIndex < 5 && afterToken) {
+                isFetching = false;
+                fetchRedditData(subredditInput.value.trim(), true);
+                return;
+            }
         } else {
             posts = newPosts;
             currentIndex = 0;
             if (posts.length > 0) {
                 playPauseBtn.disabled = false;
                 renderCurrentPost();
+            } else if (afterToken) {
+                isFetching = false;
+                fetchRedditData(subredditInput.value.trim(), true);
+                return;
             } else {
-                alert("No valid images or videos found.");
+                alert("No new images or videos found. Try clearing your history.");
             }
         }
     } catch (error) {
@@ -138,6 +163,10 @@ function renderCurrentPost() {
     if (currentIndex >= posts.length) currentIndex = 0;
 
     const post = posts[currentIndex];
+    if (!post) return; 
+
+    markAsSeen(post.id);
+
     postTitle.textContent = post.title;
     postSubreddit.textContent = `r/${post.subreddit}`;
 
@@ -163,7 +192,6 @@ function renderCurrentPost() {
         const img = document.createElement('img');
         img.src = post.url;
         
-        // Differentiate between gallery speed and single image speed
         const imgSpeed = parseInt(imgSpeedInput.value, 10) || 5;
         const galSpeed = parseInt(galSpeedInput.value, 10) || 3;
         
@@ -196,8 +224,16 @@ startBtn.addEventListener('click', () => {
     const subreddits = subredditInput.value.trim();
     if (subreddits) {
         localStorage.setItem('rs_subs', subreddits);
+        posts = [];
+        afterToken = null;
         fetchRedditData(subreddits, false);
     }
+});
+
+clearBtn.addEventListener('click', () => {
+    seenPosts.clear();
+    localStorage.removeItem('rs_seen_posts');
+    alert("History cleared. You will now see previously viewed posts.");
 });
 
 playPauseBtn.addEventListener('click', togglePlayPause);
