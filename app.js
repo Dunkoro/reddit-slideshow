@@ -11,7 +11,18 @@ const IMAGE_DURATION = 5000; // 5 seconds for images
 // --- 1. DATA FETCHING & PARSING ---
 async function fetchRedditData(subreddits) {
     try {
-        const response = await fetch(`https://www.reddit.com/r/${subreddits}.json?limit=50`);
+        // 1. Construct the target Reddit URL
+        const targetUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50`;
+        
+        // 2. Wrap it in a CORS proxy to bypass browser restrictions
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+        const response = await fetch(proxyUrl);
+
+        if (!response.ok) {
+            throw new Error(`HTTP Error: ${response.status} - ${response.statusText}`);
+        }
+
         const json = await response.json();
         
         // Filter out text posts and unsupported media
@@ -36,8 +47,8 @@ async function fetchRedditData(subreddits) {
             alert("No valid images or videos found in those subreddits.");
         }
     } catch (error) {
-        console.error("Error fetching Reddit data:", error);
-        alert("Failed to fetch data. Check subreddit names.");
+        console.error("Network or Parsing Error:", error);
+        alert(`Failed to fetch data. Check console (F12) for details.\nError: ${error.message}`);
     }
 }
 
