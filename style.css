@@ -1,0 +1,41 @@
+body, html {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: #000;
+    overflow: hidden; /* Prevents scrolling */
+    font-family: sans-serif;
+    color: white;
+}
+
+#ui-container {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 10;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 15px;
+    border-radius: 8px;
+    display: flex;
+    gap: 10px;
+    transition: opacity 0.3s;
+}
+
+/* Hide UI when slideshow is active, reveal on hover/tap */
+#ui-container.hidden { opacity: 0; pointer-events: none; }
+#ui-container:hover { opacity: 1; pointer-events: auto; }
+
+#media-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+img, video {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain; /* Ensures aspect ratio is maintained */
+}
