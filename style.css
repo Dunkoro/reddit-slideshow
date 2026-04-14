@@ -4,9 +4,14 @@ body, html {
     width: 100vw;
     height: 100vh;
     background-color: #000;
-    overflow: hidden; /* Prevents scrolling */
+    overflow: hidden;
     font-family: sans-serif;
     color: white;
+}
+
+/* Hides cursor during slideshow */
+body.idle {
+    cursor: none;
 }
 
 #ui-container {
@@ -19,12 +24,23 @@ body, html {
     border-radius: 8px;
     display: flex;
     gap: 10px;
-    transition: opacity 0.3s;
+    transition: opacity 0.3s ease;
 }
 
-/* Hide UI when slideshow is active, reveal on hover/tap */
-#ui-container.hidden { opacity: 0; pointer-events: none; }
-#ui-container:hover { opacity: 1; pointer-events: auto; }
+#ui-container.hidden { 
+    opacity: 0; 
+    pointer-events: none; 
+}
+
+button {
+    cursor: pointer;
+    padding: 5px 10px;
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 
 #media-container {
     width: 100%;
@@ -37,5 +53,5 @@ body, html {
 img, video {
     max-width: 100%;
     max-height: 100%;
-    object-fit: contain; /* Ensures aspect ratio is maintained */
+    object-fit: contain;
 }
