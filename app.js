@@ -77,8 +77,20 @@ async function fetchRedditData(subreddits, append = false) {
     isFetching = true;
 
     try {
-        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50&t=${Date.now()}`;
+        // 1. SANITIZE PATH: Remove leading/trailing slashes user might have typed
+        let cleanInput = subreddits.trim().replace(/^\/+|\/+$/g, '');
+        
+        // 2. LOGIC: If input doesn't start with 'r/' or 'user/', assume it's a standard sub list
+        let path = cleanInput;
+        if (!cleanInput.startsWith('r/') && !cleanInput.startsWith('user/')) {
+            path = `r/${cleanInput}`;
+        }
+
+        // 3. BUILD URL: Ensure the .json and cache buster are outside the path
+        const baseUrl = `https://www.reddit.com/${path}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
+        
+        // 4. PROXY: encodeURIComponent is mandatory for mobile browsers to handle slashes in the query string
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
 
         const response = await fetch(proxyUrl);
@@ -97,15 +109,12 @@ async function fetchRedditData(subreddits, append = false) {
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
-                        // COMPRESSION LOGIC (GALLERIES): media.p contains compressed previews
-                        let targetUrl = media.s.u; 
+                        let targetImgUrl = media.s.u; 
                         if (media.p && media.p.length > 0) {
-                            // Find the first preview that is at least 1080px wide, or fallback to the largest preview
                             const optimalSize = media.p.find(img => img.x >= 1080) || media.p[media.p.length - 1];
-                            targetUrl = optimalSize.u;
+                            targetImgUrl = optimalSize.u;
                         }
-                        
-                        const cleanUrl = targetUrl.replace(/&amp;/g, '&');
+                        const cleanUrl = targetImgUrl.replace(/&amp;/g, '&');
                         newPosts.push({ id: data.id, title: data.title, subreddit: data.subreddit, isVideo: false, isGalleryItem: true, url: cleanUrl });
                     }
                 });
@@ -126,7 +135,6 @@ async function fetchRedditData(subreddits, append = false) {
                         isVideoFlag = true;
                         if (mediaUrl.endsWith('.gifv')) mediaUrl = mediaUrl.replace('.gifv', '.mp4');
                     } else if (data.preview && data.preview.images && data.preview.images[0].resolutions) {
-                        // COMPRESSION LOGIC (SINGLE IMAGES): resolutions array contains compressed previews
                         const resolutions = data.preview.images[0].resolutions;
                         if (resolutions.length > 0) {
                             const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
@@ -142,13 +150,11 @@ async function fetchRedditData(subreddits, append = false) {
         if (append) {
             const wasEmpty = posts.length === 0;
             posts = posts.concat(newPosts);
-            
             if (posts.length - currentIndex < 5 && afterToken) {
                 isFetching = false;
-                fetchRedditData(subredditInput.value.trim(), true);
+                fetchRedditData(subreddits, true);
                 return;
             }
-            
             if (wasEmpty && posts.length > 0) {
                 playPauseBtn.disabled = false;
                 renderCurrentPost();
@@ -161,10 +167,10 @@ async function fetchRedditData(subreddits, append = false) {
                 renderCurrentPost();
             } else if (afterToken) {
                 isFetching = false;
-                fetchRedditData(subredditInput.value.trim(), true);
+                fetchRedditData(subreddits, true);
                 return;
             } else {
-                alert("No new images or videos found. Try clearing your history.");
+                alert("No new media found. Check your path or clear history.");
             }
         }
     } catch (error) {
