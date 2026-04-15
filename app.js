@@ -6,7 +6,8 @@ const clearBtn = document.getElementById('clear-btn');
 const subredditInput = document.getElementById('subreddit-input');
 const postTitle = document.getElementById('post-title');
 const postSubreddit = document.getElementById('post-subreddit');
-
+const videoControls = document.getElementById('video-controls');
+const videoScrub = document.getElementById('video-scrub');
 const imgSpeedInput = document.getElementById('img-speed');
 const galSpeedInput = document.getElementById('gal-speed');
 const vidMaxInput = document.getElementById('vid-max');
@@ -20,6 +21,7 @@ let afterToken = null;
 let isFetching = false;
 let currentWaitTime = 0;
 let idleTimeout;
+let isScrubbing = false;
 
 // Load seen history
 let seenPosts = new Set(JSON.parse(localStorage.getItem('rs_seen_posts') || '[]'));
@@ -187,67 +189,58 @@ async function fetchRedditData(subreddits, append = false) {
 }
 
 // --- 3. RENDER & PLAYBACK LOGIC ---
+// --- Update renderCurrentPost ---
 function renderCurrentPost() {
     clearTimeout(slideTimer);
     mediaContainer.innerHTML = '';
+    
+    // Hide controls by default
+    videoControls.classList.add('hidden');
 
     if (currentIndex >= posts.length - 5 && afterToken) fetchRedditData(subredditInput.value.trim(), true);
     if (currentIndex >= posts.length) currentIndex = 0;
 
     const post = posts[currentIndex];
-    if (!post) return; 
+    if (!post) return;
 
     markAsSeen(post.id);
-
     postTitle.textContent = post.title;
     postSubreddit.textContent = `r/${post.subreddit}`;
-
-    if (posts[currentIndex + 1] && !posts[currentIndex + 1].isVideo) {
-        const preloader = new Image();
-        preloader.src = posts[currentIndex + 1].url;
-    }
 
     if (post.isVideo) {
         const video = document.createElement('video');
         video.src = post.url;
         video.autoplay = true;
         video.muted = true;
-        
+        video.playsInline = true; // Crucial for mobile PWAs
+
         video.addEventListener('loadedmetadata', () => {
+            // Show and setup scrub bar
+            videoControls.classList.remove('hidden');
+            videoScrub.max = video.duration;
+            videoScrub.value = 0;
+
             const vidMax = parseInt(vidMaxInput.value, 10) || 30;
             currentWaitTime = Math.min(video.duration, vidMax) * 1000;
             if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
         });
-        
+
+        // Update bar position as video plays
+        video.addEventListener('timeupdate', () => {
+            if (!isScrubbing) {
+                videoScrub.value = video.currentTime;
+            }
+        });
+
         mediaContainer.appendChild(video);
     } else {
         const img = document.createElement('img');
         img.src = post.url;
-        
         const imgSpeed = parseInt(imgSpeedInput.value, 10) || 5;
         const galSpeed = parseInt(galSpeedInput.value, 10) || 3;
-        
         currentWaitTime = (post.isGalleryItem ? galSpeed : imgSpeed) * 1000;
-        
         if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
         mediaContainer.appendChild(img);
-    }
-}
-
-function nextSlide() { currentIndex++; renderCurrentPost(); }
-function prevSlide() { currentIndex = currentIndex > 0 ? currentIndex - 1 : 0; renderCurrentPost(); }
-
-function togglePlayPause() {
-    isPlaying = !isPlaying;
-    playPauseBtn.textContent = isPlaying ? "Pause" : "Play";
-    if (isPlaying) {
-        const media = mediaContainer.querySelector('video');
-        if (media) media.play();
-        slideTimer = setTimeout(nextSlide, currentWaitTime);
-    } else {
-        clearTimeout(slideTimer);
-        const media = mediaContainer.querySelector('video');
-        if (media) media.pause();
     }
 }
 
@@ -294,5 +287,32 @@ mediaContainer.addEventListener('click', e => {
     if (clickX > window.innerWidth / 2) nextSlide();
     else prevSlide();
 });
+
+videoScrub.addEventListener('input', () => {
+    isScrubbing = true;
+    const video = mediaContainer.querySelector('video');
+    if (video) {
+        video.currentTime = videoScrub.value;
+    }
+});
+
+videoScrub.addEventListener('change', () => {
+    isScrubbing = false;
+    const video = mediaContainer.querySelector('video');
+    if (video && isPlaying) {
+        // Reset the auto-advance timer based on new remaining time
+        clearTimeout(slideTimer);
+        const vidMax = parseInt(vidMaxInput.value, 10) || 30;
+        const remaining = (Math.min(video.duration, vidMax) - video.currentTime) * 1000;
+        if (remaining > 0) {
+            slideTimer = setTimeout(nextSlide, remaining);
+        } else {
+            nextSlide();
+        }
+    }
+});
+
+videoControls.addEventListener('click', (e) => e.stopPropagation());
+videoControls.addEventListener('touchstart', (e) => e.stopPropagation());
 
 init();
