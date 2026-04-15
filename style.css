@@ -96,3 +96,34 @@ img, video {
     font-size: 0.9rem;
     color: #aaa;
 }
+
+/* Hide video controls by default or when idle */
+#video-controls.hidden,
+body.idle #video-controls {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#video-controls {
+    position: absolute;
+    bottom: 110px; /* Positioned just above the info-overlay */
+    left: 20px;
+    right: 20px;
+    z-index: 20; /* Higher than media-container */
+    transition: opacity 0.3s ease;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 10px;
+    border-radius: 20px;
+}
+
+#video-scrub {
+    width: 100%;
+    cursor: pointer;
+    accent-color: #0084ff; /* Match your brand color */
+}
+
+/* Ensure the info-overlay doesn't overlap the new bar */
+#info-overlay {
+    bottom: 20px;
+    /* ... rest same ... */
+}
