@@ -75,6 +75,7 @@ function markAsSeen(id) {
 
 // --- 2. DATA FETCHING (SMART ROUTING + ULTIMATE MEDIA CATCHER) ---
 async function fetchRedditData(subreddits, append = false) {
+    async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
 
@@ -87,6 +88,41 @@ async function fetchRedditData(subreddits, append = false) {
         if (cleanInput.startsWith('http')) {
             try {
                 const urlObj = new URL(cleanInput);
+                cleanInput = urlObj.pathname; 
+            } catch(e) {}
+        }
+
+        // Strip leading/trailing slashes
+        cleanInput = cleanInput.replace(/^\/+|\/+$/g, '');
+
+        // THE MAGIC TRICK: Convert '+' to '%2B' before building the URL.
+        // This stops corsproxy from accidentally turning it into a blank space!
+        cleanInput = cleanInput.replace(/\+/g, '%2B');
+
+        // Smart endpoint routing
+        let endpoint = '';
+        if (cleanInput.includes('/m/') || cleanInput.startsWith('user/')) {
+            endpoint = cleanInput; 
+        } else {
+            cleanInput = cleanInput.replace(/^r\//i, '');
+            endpoint = `r/${cleanInput}`;
+        }
+
+        const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}`;
+        const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
+        
+        // Switch back to corsproxy.io
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+        const response = await fetch(proxyUrl);
+        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        
+        const json = await response.json();
+        afterToken = json.data.after;
+
+        const newPosts = [];
+        // ... the rest of the loop stays exactly the same ...
+
                 cleanInput = urlObj.pathname; 
             } catch(e) {}
         }
