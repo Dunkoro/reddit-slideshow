@@ -99,14 +99,16 @@ async function fetchRedditData(subreddits, append = false) {
             endpoint = `r/${cleanInput}`;
         }
 
-        const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}`;
+        // Added raw_json=1 to prevent Reddit from breaking URLs with HTML entities
+        const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}&raw_json=1`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         
-        // PROXY WATERFALL: Try multiple public proxies if one fails or returns HTML
+        // PROXY WATERFALL: Direct fetch first, then fallback to public proxies
         const proxies = [
-            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+            targetUrl, // Try direct first to bypass aggressive adblockers
             `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`
+            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`
         ];
 
         let json = null;
@@ -115,18 +117,15 @@ async function fetchRedditData(subreddits, append = false) {
             try {
                 const response = await fetch(proxies[i]);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                
                 const text = await response.text();
-                
-                // Safety net: Try to parse JSON. If it's an HTML error page, this will fail and trigger the catch block.
                 json = JSON.parse(text); 
-                break; // Success! Exit the loop.
+                break; // Success! Exit loop.
             } catch (error) {
-                console.warn(`Proxy ${i + 1} failed, trying next...`, error.message);
+                console.warn(`Attempt ${i + 1} failed, trying next...`);
             }
         }
 
-        if (!json) throw new Error("All proxies failed or returned invalid data.");
+        if (!json) throw new Error("All network attempts failed or returned invalid data.");
 
         afterToken = json.data.after;
 
@@ -140,17 +139,19 @@ async function fetchRedditData(subreddits, append = false) {
             let isVideoFlag = false;
             let isIframeFlag = false;
 
-            // 1. Galleries
-            if (data.is_gallery && data.media_metadata) {
-                Object.values(data.media_metadata).forEach(media => {
-                    if (media.s && media.s.u) {
+            // 1. Galleries (FIXED: Iterates over gallery_data.items for correct sequence)
+            if (data.is_gallery && data.media_metadata && data.gallery_data?.items) {
+                data.gallery_data.items.forEach(item => {
+                    const media = data.media_metadata[item.media_id];
+                    if (media && media.s && media.s.u) {
                         let targetImgUrl = media.s.u; 
                         if (media.p && media.p.length > 0) {
                             const optimalSize = media.p.find(img => img.x >= 1080) || media.p[media.p.length - 1];
                             targetImgUrl = optimalSize.u;
                         }
                         newPosts.push({ 
-                            id: data.id, title: data.title, subreddit: data.subreddit, 
+                            id: `${data.id}_${item.media_id}`, // Unique ID so history tracker doesn't skip
+                            title: data.title, subreddit: data.subreddit, 
                             isVideo: false, isIframe: false, isGalleryItem: true, url: targetImgUrl.replace(/&amp;/g, '&') 
                         });
                     }
@@ -232,7 +233,7 @@ async function fetchRedditData(subreddits, append = false) {
         }
     } catch (error) {
         console.error("Fetch Error:", error.message);
-        alert("Failed to load posts. Reddit might be blocking the request.");
+        alert("Failed to load posts. Check your connection or subreddit name.");
     } finally {
         isFetching = false;
     }
