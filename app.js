@@ -73,18 +73,15 @@ function markAsSeen(id) {
     localStorage.setItem('rs_seen_posts', JSON.stringify(seenArray));
 }
 
-// --- 2. DATA FETCHING (SMART ROUTING + ULTIMATE MEDIA CATCHER) ---
+// --- 2. DATA FETCHING (WATERFALL PROXIES + SMART ROUTING) ---
 async function fetchRedditData(subreddits, append = false) {
-    async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
 
     try {
-        // Fix mobile spaces and convert commas to pluses
         let cleanInput = subreddits.trim().replace(/\s+/g, '');
         cleanInput = cleanInput.replace(/,/g, '+'); 
 
-        // Extract path if the user pasted a full URL
         if (cleanInput.startsWith('http')) {
             try {
                 const urlObj = new URL(cleanInput);
@@ -92,14 +89,8 @@ async function fetchRedditData(subreddits, append = false) {
             } catch(e) {}
         }
 
-        // Strip leading/trailing slashes
         cleanInput = cleanInput.replace(/^\/+|\/+$/g, '');
 
-        // THE MAGIC TRICK: Convert '+' to '%2B' before building the URL.
-        // This stops corsproxy from accidentally turning it into a blank space!
-        cleanInput = cleanInput.replace(/\+/g, '%2B');
-
-        // Smart endpoint routing
         let endpoint = '';
         if (cleanInput.includes('/m/') || cleanInput.startsWith('user/')) {
             endpoint = cleanInput; 
@@ -111,44 +102,32 @@ async function fetchRedditData(subreddits, append = false) {
         const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
         
-        // Switch back to corsproxy.io
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        // PROXY WATERFALL: Try multiple public proxies if one fails or returns HTML
+        const proxies = [
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+            `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`
+        ];
 
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-        
-        const json = await response.json();
-        afterToken = json.data.after;
+        let json = null;
 
-        const newPosts = [];
-        // ... the rest of the loop stays exactly the same ...
-
-                cleanInput = urlObj.pathname; 
-            } catch(e) {}
+        for (let i = 0; i < proxies.length; i++) {
+            try {
+                const response = await fetch(proxies[i]);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const text = await response.text();
+                
+                // Safety net: Try to parse JSON. If it's an HTML error page, this will fail and trigger the catch block.
+                json = JSON.parse(text); 
+                break; // Success! Exit the loop.
+            } catch (error) {
+                console.warn(`Proxy ${i + 1} failed, trying next...`, error.message);
+            }
         }
 
-        // Strip leading/trailing slashes
-        cleanInput = cleanInput.replace(/^\/+|\/+$/g, '');
+        if (!json) throw new Error("All proxies failed or returned invalid data.");
 
-        // Smart endpoint routing
-        let endpoint = '';
-        if (cleanInput.includes('/m/') || cleanInput.startsWith('user/')) {
-            endpoint = cleanInput; 
-        } else {
-            cleanInput = cleanInput.replace(/^r\//i, '');
-            endpoint = `r/${cleanInput}`;
-        }
-
-        const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}`;
-        const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
-        
-        // Use allorigins to avoid mangling the '+' symbol
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-        
-        const json = await response.json();
         afterToken = json.data.after;
 
         const newPosts = [];
@@ -161,7 +140,7 @@ async function fetchRedditData(subreddits, append = false) {
             let isVideoFlag = false;
             let isIframeFlag = false;
 
-            // 1. Handle Reddit Native Galleries
+            // 1. Galleries
             if (data.is_gallery && data.media_metadata) {
                 Object.values(data.media_metadata).forEach(media => {
                     if (media.s && media.s.u) {
@@ -179,7 +158,7 @@ async function fetchRedditData(subreddits, append = false) {
                 return; 
             }
 
-            // 2. The Ultimate Animation Catcher (Prioritizes transcoded MP4s)
+            // 2. Ultimate Animation Catcher
             if (data.preview?.images?.[0]?.variants?.mp4?.source?.url) {
                 mediaUrl = data.preview.images[0].variants.mp4.source.url.replace(/&amp;/g, '&');
                 isVideoFlag = true;
@@ -193,24 +172,24 @@ async function fetchRedditData(subreddits, append = false) {
                 isVideoFlag = true;
             }
             
-            // 3. Fallback for RedGIFs
+            // 3. RedGIFs
             else if (mediaUrl.includes('redgifs.com')) {
                 const videoId = mediaUrl.split('/watch/').pop().split('?')[0];
                 mediaUrl = `https://www.redgifs.com/ifr/${videoId}?autoplay=1`;
                 isIframeFlag = true;
             }
             
-            // 4. Imgur parsing
+            // 4. Imgur
             else if (mediaUrl.includes('imgur.com')) {
                 if (mediaUrl.match(/\.(gifv|gif|mp4)$/i)) {
                     mediaUrl = mediaUrl.replace(/\.(gifv|gif)$/i, '.mp4');
                     isVideoFlag = true;
                 } else if (!mediaUrl.match(/\.(jpg|jpeg|png)$/i)) {
-                    mediaUrl += '.jpg'; // Convert album/page links to direct image
+                    mediaUrl += '.jpg'; 
                 }
             }
 
-            // 5. Image Compression Fallback (Skips true .gifs)
+            // 5. Image Compression Fallback
             if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.resolutions) {
                 if (!mediaUrl.match(/\.gif$/i)) {
                     const resolutions = data.preview.images[0].resolutions;
@@ -229,7 +208,7 @@ async function fetchRedditData(subreddits, append = false) {
             }
         });
 
-        // Pagination & Queue Management
+        // Pagination
         if (append) {
             const wasEmpty = posts.length === 0;
             posts = posts.concat(newPosts);
@@ -252,7 +231,8 @@ async function fetchRedditData(subreddits, append = false) {
             }
         }
     } catch (error) {
-        console.error("Fetch Error:", error);
+        console.error("Fetch Error:", error.message);
+        alert("Failed to load posts. Reddit might be blocking the request.");
     } finally {
         isFetching = false;
     }
