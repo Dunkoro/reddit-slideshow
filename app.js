@@ -97,7 +97,7 @@ async function fetchRedditData(subreddits, append = false) {
 
             let mediaUrl = data.url;
             let isVideoFlag = false;
-            let isGallery = false;
+            let isIframeFlag = false; // NEW: Added to support RedGIF embed fallback
 
             // 1. Handle Reddit Native Galleries
             if (data.is_gallery && data.media_metadata) {
@@ -110,56 +110,57 @@ async function fetchRedditData(subreddits, append = false) {
                         }
                         newPosts.push({ 
                             id: data.id, title: data.title, subreddit: data.subreddit, 
-                            isVideo: false, isGalleryItem: true, url: targetImgUrl.replace(/&amp;/g, '&') 
+                            isVideo: false, isIframe: false, isGalleryItem: true, url: targetImgUrl.replace(/&amp;/g, '&') 
                         });
                     }
                 });
-                return; // Gallery handled, move to next post
+                return; 
             }
 
-            // 2. Handle Native Reddit Video
-            if (data.is_video && data.secure_media?.reddit_video) {
+            // 2. Transcoded Previews (BEST WAY FOR REDGIFS/IMGUR)
+            // Reddit usually processes external gifs and provides a direct, clean mp4 fallback.
+            if (data.preview?.reddit_video_preview?.fallback_url) {
+                mediaUrl = data.preview.reddit_video_preview.fallback_url;
+                isVideoFlag = true;
+            }
+            // 3. Native Reddit Video
+            else if (data.is_video && data.secure_media?.reddit_video) {
                 mediaUrl = data.secure_media.reddit_video.fallback_url;
                 isVideoFlag = true;
             } 
-            
-            // 3. Handle RedGifs (Uses their CDN pattern)
-            else if (mediaUrl.includes('redgifs.com/watch/')) {
-                const videoId = mediaUrl.split('/').pop();
-                // We use the mobile-optimized CDN link for speed
-                mediaUrl = `https://thumbs2.redgifs.com/${videoId}-mobile.mp4`;
-                isVideoFlag = true;
+            // 4. Handle RedGifs Fallback (If Reddit hasn't transcoded it)
+            else if (mediaUrl.includes('redgifs.com')) {
+                const videoId = mediaUrl.split('/watch/').pop().split('?')[0];
+                mediaUrl = `https://www.redgifs.com/ifr/${videoId}?autoplay=1`;
+                isIframeFlag = true;
             }
-
-            // 4. Handle Imgur
+            // 5. Handle Imgur Fallback
             else if (mediaUrl.includes('imgur.com')) {
                 if (mediaUrl.endsWith('.gifv') || mediaUrl.endsWith('.mp4')) {
                     mediaUrl = mediaUrl.replace('.gifv', '.mp4');
                     isVideoFlag = true;
                 } else if (!mediaUrl.match(/\.(jpg|jpeg|png|gif)$/i)) {
-                    // It's a link like imgur.com/abc - we force it to a direct image
                     mediaUrl += '.jpg';
                 }
             }
 
-            // 5. Compression Fallback for standard images
-            if (!isVideoFlag && data.preview?.images?.[0]?.resolutions) {
+            // 6. Compression Fallback for standard images
+            if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.resolutions) {
                 const resolutions = data.preview.images[0].resolutions;
                 const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
                 mediaUrl = optimalSize.url.replace(/&amp;/g, '&');
             }
 
-            // Final Validation: Only add if it's a known media type
-            const isMedia = isVideoFlag || mediaUrl.match(/\.(jpg|jpeg|png|gif|mp4|webm)$/i);
+            // Final Validation: Accept images, direct videos, or iframes
+            const isMedia = isVideoFlag || isIframeFlag || mediaUrl.match(/\.(jpg|jpeg|png|gif)$/i);
             if (isMedia) {
                 newPosts.push({ 
                     id: data.id, title: data.title, subreddit: data.subreddit, 
-                    isVideo: isVideoFlag, isGalleryItem: false, url: mediaUrl 
+                    isVideo: isVideoFlag, isIframe: isIframeFlag, isGalleryItem: false, url: mediaUrl 
                 });
             }
         });
 
-        // Appending / State Logic
         if (append) {
             const wasEmpty = posts.length === 0;
             posts = posts.concat(newPosts);
@@ -189,12 +190,10 @@ async function fetchRedditData(subreddits, append = false) {
 }
 
 // --- 3. RENDER & PLAYBACK LOGIC ---
-// --- Update renderCurrentPost ---
 function renderCurrentPost() {
     clearTimeout(slideTimer);
     mediaContainer.innerHTML = '';
     
-    // Hide controls by default
     videoControls.classList.add('hidden');
 
     if (currentIndex >= posts.length - 5 && afterToken) fetchRedditData(subredditInput.value.trim(), true);
@@ -212,10 +211,9 @@ function renderCurrentPost() {
         video.src = post.url;
         video.autoplay = true;
         video.muted = true;
-        video.playsInline = true; // Crucial for mobile PWAs
+        video.playsInline = true; 
 
         video.addEventListener('loadedmetadata', () => {
-            // Show and setup scrub bar
             videoControls.classList.remove('hidden');
             videoScrub.max = video.duration;
             videoScrub.value = 0;
@@ -225,15 +223,29 @@ function renderCurrentPost() {
             if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
         });
 
-        // Update bar position as video plays
         video.addEventListener('timeupdate', () => {
-            if (!isScrubbing) {
-                videoScrub.value = video.currentTime;
-            }
+            if (!isScrubbing) videoScrub.value = video.currentTime;
         });
 
         mediaContainer.appendChild(video);
-    } else {
+    } 
+    // NEW: Handle Iframe Fallbacks (RedGIFs)
+    else if (post.isIframe) {
+        const iframe = document.createElement('iframe');
+        iframe.src = post.url;
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        iframe.setAttribute('allow', 'autoplay; fullscreen');
+        
+        // Use the Max Video Duration setting since we can't read the iframe's internal video duration
+        const vidMax = parseInt(vidMaxInput.value, 10) || 30;
+        currentWaitTime = vidMax * 1000;
+        if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
+        
+        mediaContainer.appendChild(iframe);
+    } 
+    else {
         const img = document.createElement('img');
         img.src = post.url;
         const imgSpeed = parseInt(imgSpeedInput.value, 10) || 5;
@@ -244,7 +256,36 @@ function renderCurrentPost() {
     }
 }
 
-// --- 4. EVENT LISTENERS ---
+// --- 4. PLAYBACK CONTROLS ---
+function nextSlide() {
+    if (posts.length === 0) return;
+    currentIndex++;
+    renderCurrentPost();
+}
+
+function prevSlide() {
+    if (posts.length === 0) return;
+    currentIndex--;
+    if (currentIndex < 0) currentIndex = 0;
+    renderCurrentPost();
+}
+
+function togglePlayPause() {
+    isPlaying = !isPlaying;
+    const video = mediaContainer.querySelector('video');
+    
+    if (isPlaying) {
+        if (video) video.play();
+        const vidMax = parseInt(vidMaxInput.value, 10) || 30;
+        const remaining = video ? (Math.min(video.duration, vidMax) - video.currentTime) * 1000 : currentWaitTime;
+        slideTimer = setTimeout(nextSlide, remaining);
+    } else {
+        if (video) video.pause();
+        clearTimeout(slideTimer);
+    }
+}
+
+// --- 5. EVENT LISTENERS ---
 startBtn.addEventListener('click', () => {
     const subreddits = subredditInput.value.trim();
     if (subreddits) {
@@ -300,7 +341,6 @@ videoScrub.addEventListener('change', () => {
     isScrubbing = false;
     const video = mediaContainer.querySelector('video');
     if (video && isPlaying) {
-        // Reset the auto-advance timer based on new remaining time
         clearTimeout(slideTimer);
         const vidMax = parseInt(vidMaxInput.value, 10) || 30;
         const remaining = (Math.min(video.duration, vidMax) - video.currentTime) * 1000;
