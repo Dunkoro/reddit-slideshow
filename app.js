@@ -128,27 +128,31 @@ async function fetchRedditData(subreddits, append = false) {
                 mediaUrl = data.secure_media.reddit_video.fallback_url;
                 isVideoFlag = true;
             } 
-            // 4. Handle RedGifs Fallback (If Reddit hasn't transcoded it)
-            else if (mediaUrl.includes('redgifs.com')) {
-                const videoId = mediaUrl.split('/watch/').pop().split('?')[0];
-                mediaUrl = `https://www.redgifs.com/ifr/${videoId}?autoplay=1`;
-                isIframeFlag = true;
-            }
-            // 5. Handle Imgur Fallback
+            // 4. Handle Imgur Fallback
             else if (mediaUrl.includes('imgur.com')) {
-                if (mediaUrl.endsWith('.gifv') || mediaUrl.endsWith('.mp4')) {
-                    mediaUrl = mediaUrl.replace('.gifv', '.mp4');
+                // Imgur automatically serves .mp4 equivalents for both .gif and .gifv
+                if (mediaUrl.match(/\.(gifv|mp4|gif)$/i)) {
+                    mediaUrl = mediaUrl.replace(/\.(gifv|gif)$/i, '.mp4');
                     isVideoFlag = true;
-                } else if (!mediaUrl.match(/\.(jpg|jpeg|png|gif)$/i)) {
+                } else if (!mediaUrl.match(/\.(jpg|jpeg|png)$/i)) {
                     mediaUrl += '.jpg';
                 }
             }
 
+            // 5. Native Reddit GIF Transcoding (Catches heavy GIFs not hosted on Imgur)
+            if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.variants?.mp4) {
+                mediaUrl = data.preview.images[0].variants.mp4.source.url.replace(/&amp;/g, '&');
+                isVideoFlag = true;
+            }
+
             // 6. Compression Fallback for standard images
             if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.resolutions) {
-                const resolutions = data.preview.images[0].resolutions;
-                const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
-                mediaUrl = optimalSize.url.replace(/&amp;/g, '&');
+                // Prevent accidentally overwriting an actual .gif with a static thumbnail
+                if (!mediaUrl.match(/\.gif$/i)) {
+                    const resolutions = data.preview.images[0].resolutions;
+                    const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
+                    mediaUrl = optimalSize.url.replace(/&amp;/g, '&');
+                }
             }
 
             // Final Validation: Accept images, direct videos, or iframes
