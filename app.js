@@ -73,15 +73,41 @@ function markAsSeen(id) {
     localStorage.setItem('rs_seen_posts', JSON.stringify(seenArray));
 }
 
-// --- 2. DATA FETCHING (WITH EXTERNAL LINK SUPPORT) ---
+// --- 2. DATA FETCHING (SMART ROUTING + ULTIMATE MEDIA CATCHER) ---
 async function fetchRedditData(subreddits, append = false) {
     if (isFetching) return;
     isFetching = true;
 
     try {
-        const baseUrl = `https://www.reddit.com/r/${subreddits}.json?limit=50&t=${Date.now()}`;
+        // Fix mobile spaces and convert commas to pluses
+        let cleanInput = subreddits.trim().replace(/\s+/g, '');
+        cleanInput = cleanInput.replace(/,/g, '+'); 
+
+        // Extract path if the user pasted a full URL
+        if (cleanInput.startsWith('http')) {
+            try {
+                const urlObj = new URL(cleanInput);
+                cleanInput = urlObj.pathname; 
+            } catch(e) {}
+        }
+
+        // Strip leading/trailing slashes
+        cleanInput = cleanInput.replace(/^\/+|\/+$/g, '');
+
+        // Smart endpoint routing
+        let endpoint = '';
+        if (cleanInput.includes('/m/') || cleanInput.startsWith('user/')) {
+            endpoint = cleanInput; 
+        } else {
+            cleanInput = cleanInput.replace(/^r\//i, '');
+            endpoint = `r/${cleanInput}`;
+        }
+
+        const baseUrl = `https://www.reddit.com/${endpoint}.json?limit=50&t=${Date.now()}`;
         const targetUrl = append && afterToken ? `${baseUrl}&after=${afterToken}` : baseUrl;
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        
+        // Use allorigins to avoid mangling the '+' symbol
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
 
         const response = await fetch(proxyUrl);
         if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
@@ -90,13 +116,14 @@ async function fetchRedditData(subreddits, append = false) {
         afterToken = json.data.after;
 
         const newPosts = [];
- json.data.children.forEach(post => {
+        
+        json.data.children.forEach(post => {
             const data = post.data;
             if (seenPosts.has(data.id)) return;
 
             let mediaUrl = data.url;
             let isVideoFlag = false;
-            let isIframeFlag = false; // NEW: Added to support RedGIF embed fallback
+            let isIframeFlag = false;
 
             // 1. Handle Reddit Native Galleries
             if (data.is_gallery && data.media_metadata) {
@@ -116,37 +143,39 @@ async function fetchRedditData(subreddits, append = false) {
                 return; 
             }
 
-            // 2. Transcoded Previews (BEST WAY FOR REDGIFS/IMGUR)
-            // Reddit usually processes external gifs and provides a direct, clean mp4 fallback.
-            if (data.preview?.reddit_video_preview?.fallback_url) {
-                mediaUrl = data.preview.reddit_video_preview.fallback_url;
-                isVideoFlag = true;
-            }
-            // 3. Native Reddit Video
-            else if (data.is_video && data.secure_media?.reddit_video) {
-                mediaUrl = data.secure_media.reddit_video.fallback_url;
-                isVideoFlag = true;
-            } 
-            // 4. Handle Imgur Fallback
-            else if (mediaUrl.includes('imgur.com')) {
-                // Imgur automatically serves .mp4 equivalents for both .gif and .gifv
-                if (mediaUrl.match(/\.(gifv|mp4|gif)$/i)) {
-                    mediaUrl = mediaUrl.replace(/\.(gifv|gif)$/i, '.mp4');
-                    isVideoFlag = true;
-                } else if (!mediaUrl.match(/\.(jpg|jpeg|png)$/i)) {
-                    mediaUrl += '.jpg';
-                }
-            }
-
-            // 5. Native Reddit GIF Transcoding (Catches heavy GIFs not hosted on Imgur)
-            if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.variants?.mp4) {
+            // 2. The Ultimate Animation Catcher (Prioritizes transcoded MP4s)
+            if (data.preview?.images?.[0]?.variants?.mp4?.source?.url) {
                 mediaUrl = data.preview.images[0].variants.mp4.source.url.replace(/&amp;/g, '&');
                 isVideoFlag = true;
             }
+            else if (data.preview?.reddit_video_preview?.fallback_url) {
+                mediaUrl = data.preview.reddit_video_preview.fallback_url.replace(/&amp;/g, '&');
+                isVideoFlag = true;
+            }
+            else if (data.is_video && data.secure_media?.reddit_video?.fallback_url) {
+                mediaUrl = data.secure_media.reddit_video.fallback_url.replace(/&amp;/g, '&');
+                isVideoFlag = true;
+            }
+            
+            // 3. Fallback for RedGIFs
+            else if (mediaUrl.includes('redgifs.com')) {
+                const videoId = mediaUrl.split('/watch/').pop().split('?')[0];
+                mediaUrl = `https://www.redgifs.com/ifr/${videoId}?autoplay=1`;
+                isIframeFlag = true;
+            }
+            
+            // 4. Imgur parsing
+            else if (mediaUrl.includes('imgur.com')) {
+                if (mediaUrl.match(/\.(gifv|gif|mp4)$/i)) {
+                    mediaUrl = mediaUrl.replace(/\.(gifv|gif)$/i, '.mp4');
+                    isVideoFlag = true;
+                } else if (!mediaUrl.match(/\.(jpg|jpeg|png)$/i)) {
+                    mediaUrl += '.jpg'; // Convert album/page links to direct image
+                }
+            }
 
-            // 6. Compression Fallback for standard images
+            // 5. Image Compression Fallback (Skips true .gifs)
             if (!isVideoFlag && !isIframeFlag && data.preview?.images?.[0]?.resolutions) {
-                // Prevent accidentally overwriting an actual .gif with a static thumbnail
                 if (!mediaUrl.match(/\.gif$/i)) {
                     const resolutions = data.preview.images[0].resolutions;
                     const optimalSize = resolutions.find(img => img.width >= 1080) || resolutions[resolutions.length - 1];
@@ -154,7 +183,7 @@ async function fetchRedditData(subreddits, append = false) {
                 }
             }
 
-            // Final Validation: Accept images, direct videos, or iframes
+            // Final Validation
             const isMedia = isVideoFlag || isIframeFlag || mediaUrl.match(/\.(jpg|jpeg|png|gif)$/i);
             if (isMedia) {
                 newPosts.push({ 
@@ -164,6 +193,7 @@ async function fetchRedditData(subreddits, append = false) {
             }
         });
 
+        // Pagination & Queue Management
         if (append) {
             const wasEmpty = posts.length === 0;
             posts = posts.concat(newPosts);
@@ -196,7 +226,6 @@ async function fetchRedditData(subreddits, append = false) {
 function renderCurrentPost() {
     clearTimeout(slideTimer);
     mediaContainer.innerHTML = '';
-    
     videoControls.classList.add('hidden');
 
     if (currentIndex >= posts.length - 5 && afterToken) fetchRedditData(subredditInput.value.trim(), true);
@@ -232,7 +261,6 @@ function renderCurrentPost() {
 
         mediaContainer.appendChild(video);
     } 
-    // NEW: Handle Iframe Fallbacks (RedGIFs)
     else if (post.isIframe) {
         const iframe = document.createElement('iframe');
         iframe.src = post.url;
@@ -241,7 +269,6 @@ function renderCurrentPost() {
         iframe.style.border = 'none';
         iframe.setAttribute('allow', 'autoplay; fullscreen');
         
-        // Use the Max Video Duration setting since we can't read the iframe's internal video duration
         const vidMax = parseInt(vidMaxInput.value, 10) || 30;
         currentWaitTime = vidMax * 1000;
         if (isPlaying) slideTimer = setTimeout(nextSlide, currentWaitTime);
