@@ -90,8 +90,7 @@ async function fetchRedditData(subreddits, append = false) {
         afterToken = json.data.after;
 
         const newPosts = [];
-        
-        json.data.children.forEach(post => {
+ json.data.children.forEach(post => {
             const data = post.data;
             if (seenPosts.has(data.id)) return;
 
